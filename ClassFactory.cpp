@@ -47,15 +47,13 @@ STDMETHODIMP_(ULONG) CClassFactory::AddRef()
 
 STDMETHODIMP_(ULONG) CClassFactory::Release()
 {
-	ULONG cRef;
+	ULONG cref;
 
-	cRef = InterlockedDecrement(&m_cRef);
-	if (cRef == 0)
-	{
+	cref = InterlockedDecrement(&m_cRef);
+	if (cref == 0)
 		delete this;
-	}
 
-	return cRef;
+	return cref;
 }
 
 //
@@ -67,7 +65,7 @@ STDMETHODIMP CClassFactory::CreateInstance(IUnknown *pUnkOuter, REFIID riid, voi
 	CDeskBand *pdb;
 
 	hr = CLASS_E_NOAGGREGATION;
-	pdb = NULL;
+	*ppvObject = NULL;
 
 	if (!pUnkOuter)
 	{
@@ -87,13 +85,9 @@ STDMETHODIMP CClassFactory::CreateInstance(IUnknown *pUnkOuter, REFIID riid, voi
 STDMETHODIMP CClassFactory::LockServer(BOOL fLock)
 {
 	if (fLock)
-	{
 		InterlockedIncrement(&g_cDllRef);
-	}
 	else
-	{
 		InterlockedDecrement(&g_cDllRef);
-	}
 
 	return S_OK;
 }

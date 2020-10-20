@@ -3,15 +3,13 @@
 
 
 extern LONG g_cDllRef;
-extern CLSID g_StartID;
-
-DWORD g_dwBandID = 0;
+extern CLSID CLSID_Start;
 
 
 CDeskBand::CDeskBand()
 {
 	m_cRef = 1;
-	m_fIsDirty = FALSE;
+	m_dwBandID = 0;
 	m_fCompositionEnabled = FALSE;
 
 	InterlockedIncrement(&g_cDllRef);
@@ -55,9 +53,7 @@ STDMETHODIMP CDeskBand::QueryInterface(REFIID riid, void **ppvObject)
 	}
 
 	if (*ppvObject)
-	{
 		AddRef();
-	}
 
 	return hr;
 }
@@ -69,15 +65,13 @@ STDMETHODIMP_(ULONG) CDeskBand::AddRef()
 
 STDMETHODIMP_(ULONG) CDeskBand::Release()
 {
-	ULONG cRef;
+	ULONG cref;
 
-	cRef = InterlockedDecrement(&m_cRef);
-	if (cRef == 0)
-	{
+	cref = InterlockedDecrement(&m_cRef);
+	if (cref == 0)
 		delete this;
-	}
 
-	return cRef;
+	return cref;
 }
 
 //
@@ -100,6 +94,8 @@ STDMETHODIMP CDeskBand::ContextSensitiveHelp(BOOL fEnterMode)
 //
 STDMETHODIMP CDeskBand::ShowDW(BOOL fShow)
 {
+	ShowStart(fShow, m_dwBandID);
+
 	return S_OK;
 }
 
@@ -120,9 +116,9 @@ STDMETHODIMP CDeskBand::ResizeBorderDW(LPCRECT prcBorder, IUnknown *punkToolbarS
 //
 STDMETHODIMP CDeskBand::GetBandInfo(DWORD dwBandID, DWORD dwViewMode, DESKBANDINFO *pdbi)
 {
-	g_dwBandID = dwBandID;
+	m_dwBandID = dwBandID;
 
-	return S_OK;
+	return E_NOTIMPL;
 }
 
 //
@@ -139,6 +135,8 @@ STDMETHODIMP CDeskBand::SetCompositionState(BOOL fCompositionEnabled)
 {
 	m_fCompositionEnabled = fCompositionEnabled;
 
+	UpdateStart();
+
 	return S_OK;
 }
 
@@ -154,7 +152,7 @@ STDMETHODIMP CDeskBand::GetCompositionState(BOOL *pfCompositionEnabled)
 //
 STDMETHODIMP CDeskBand::GetClassID(CLSID *pClassID)
 {
-	*pClassID = g_StartID;
+	*pClassID = CLSID_Start;
 
 	return S_OK;
 }
@@ -164,7 +162,7 @@ STDMETHODIMP CDeskBand::GetClassID(CLSID *pClassID)
 //
 STDMETHODIMP CDeskBand::IsDirty()
 {
-	return m_fIsDirty ? S_OK : S_FALSE;
+	return S_FALSE;
 }
 
 STDMETHODIMP CDeskBand::Load(IStream *pStm)
@@ -174,11 +172,6 @@ STDMETHODIMP CDeskBand::Load(IStream *pStm)
 
 STDMETHODIMP CDeskBand::Save(IStream *pStm, BOOL fClearDirty)
 {
-	if (fClearDirty)
-	{
-		m_fIsDirty = FALSE;
-	}
-
 	return S_OK;
 }
 
@@ -194,29 +187,22 @@ STDMETHODIMP CDeskBand::SetSite(IUnknown *pUnkSite)
 {
 	HRESULT hr;
 	IOleWindow *pow;
-	HWND hWnd;
+	HWND hwnd;
 
 	hr = E_FAIL;
-	pow = NULL;
-	hWnd = NULL;
 
 	if (pUnkSite)
 	{
-		hr = pUnkSite->QueryInterface(IID_IOleWindow, reinterpret_cast<void **>(&pow));
+		hr = pUnkSite->QueryInterface(IID_IOleWindow,
+			reinterpret_cast<void **>(&pow));
 		if (SUCCEEDED(hr))
 		{
-			hr = pow->GetWindow(&hWnd);
+			hr = pow->GetWindow(&hwnd);
 			if (SUCCEEDED(hr))
-			{
-				hr = CreateStart(hWnd);
-			}
-		}
-	}
+				hr = CreateStart(hwnd);
 
-	if (pow)
-	{
-		pow->Release();
-		pow = NULL;
+			pow->Release();
+		}
 	}
 
 	return hr;

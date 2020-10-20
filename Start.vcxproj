@@ -148,15 +148,26 @@
     <ClCompile Include="ClassFactory.cpp" />
     <ClCompile Include="DeskBand.cpp" />
     <ClCompile Include="DllMain.cpp" />
+    <ClCompile Include="Pane.cpp" />
     <ClCompile Include="Start.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="ClassFactory.h" />
     <ClInclude Include="DeskBand.h" />
+    <ClInclude Include="Pane.h" />
+    <ClInclude Include="Resource.h" />
     <ClInclude Include="Start.h" />
   </ItemGroup>
   <ItemGroup>
     <None Include="Exports.def" />
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="Start.rc" />
+  </ItemGroup>
+  <ItemGroup>
+    <Image Include="Res\Progs.ico" />
+    <Image Include="Res\Start.ico" />
+    <Image Include="Res\Tabs.ico" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

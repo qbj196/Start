@@ -1,33 +1,82 @@
 #include "Start.h"
+#include "Pane.h"
+#include "Resource.h"
 
 
 extern HINSTANCE g_hDllInst;
-extern DWORD g_dwBandID;
 
-HWND m_hStart = NULL;
-HWND m_hRebar = NULL;
-HWND m_hTaskbar = NULL;
-BOOL m_fShowDesktop = TRUE;
-WNDPROC m_wpOrigTaskbarProc = NULL;
+HWND hOrigStartWnd = NULL;
+HWND hStartWnd = NULL;
+HWND hRebarWnd = NULL;
+HWND hTaskSwWnd = NULL;
+HWND hTaskbarWnd = NULL;
+HWND hProgmanWnd = NULL;
+HWND hWorkervWnd = NULL;
+HWND hWorkerwWnd = NULL;
+BOOL fEnterDesktop = FALSE;
+BOOL fStartEnabled = TRUE;
+BOOL fMouseLeftWnd = TRUE;
+BOOL fInterceptMsg = FALSE;
+UINT uShellHookMsg = 0;
+HICON hStartIcon16 = NULL;
+HICON hStartIcon32 = NULL;
+WNDPROC wpOrigRebarProc = NULL;
+WNDPROC wpOrigTaskbarProc = NULL;
+WNDPROC wpOrigProgmanProc = NULL;
+WNDPROC wpOrigWorkerwProc = NULL;
 
 
 // Start
 static LRESULT CALLBACK StartProc(HWND, UINT, WPARAM, LPARAM);
-void OnStartShowWindow(HWND, BOOL);
+void OnStartPaint();
+void OnStartMouseMove();
+
+// Rebar
+static LRESULT CALLBACK RebarProc(HWND, UINT, WPARAM, LPARAM);
+void OnRebarWindowPosChanging(LPARAM);
+void OnRebarWindowPosChanged(LPARAM);
 
 // Taskbar
 static LRESULT CALLBACK TaskbarProc(HWND, UINT, WPARAM, LPARAM);
-void OnTaskbarShowDesktop(HWND);
+void OnTaskbarEnterDesktop();
+void OnTaskbarSetWindowProc();
+void OnTaskbarShowEdgeui(BOOL);
+
+// Progman
+static LRESULT CALLBACK ProgmanProc(HWND, UINT, WPARAM, LPARAM);
+
+// Workerw
+static LRESULT CALLBACK WorkerwProc(HWND, UINT, WPARAM, LPARAM);
 
 
-HRESULT CreateStart(HWND hWndParent)
+HRESULT CreateStart(HWND hWnd)
 {
-	HRESULT hr;
 	WNDCLASSEX wcex;
 
-	hr = E_FAIL;
-	m_hRebar = hWndParent;
-	m_hTaskbar = GetParent(hWndParent);
+	hRebarWnd = hWnd;
+	hTaskbarWnd = GetParent(hWnd);
+
+	uShellHookMsg = RegisterWindowMessage(TEXT("SHELLHOOK"));
+	if (!uShellHookMsg)
+		return E_FAIL;
+
+	hTaskSwWnd = FindWindowEx(hRebarWnd, NULL, TEXT("MSTaskSwWClass"), NULL);
+	if (!hTaskSwWnd)
+		return E_FAIL;
+	
+	hOrigStartWnd = FindWindowEx(hTaskbarWnd, NULL, TEXT("Start"), NULL);
+	if (hOrigStartWnd)
+		ShowWindow(hOrigStartWnd, SW_HIDE);
+
+	hStartIcon16 = (HICON)LoadImage(g_hDllInst, MAKEINTRESOURCE(IDI_START),
+		IMAGE_ICON, 16, 16, LR_DEFAULTCOLOR);
+	if (!hStartIcon16)
+		return E_FAIL;
+
+	hStartIcon32 = (HICON)LoadImage(g_hDllInst, MAKEINTRESOURCE(IDI_START),
+		IMAGE_ICON, 32, 32, LR_DEFAULTCOLOR);
+	if (!hStartIcon32)
+		return E_FAIL;
 
 	wcex.cbClsExtra		= 0;
 	wcex.cbSize			= sizeof(WNDCLASSEX);
@@ -38,47 +87,125 @@ HRESULT CreateStart(HWND hWndParent)
 	wcex.hIconSm		= NULL;
 	wcex.hInstance		= g_hDllInst;
 	wcex.lpfnWndProc	= StartProc;
-	wcex.lpszClassName	= _T("Start");
+	wcex.lpszClassName	= TEXT("Start");
 	wcex.lpszMenuName	= NULL;
-	wcex.style			= CS_HREDRAW | CS_VREDRAW;
+	wcex.style			= CS_VREDRAW | CS_HREDRAW;
 	if (!RegisterClassEx(&wcex))
-		goto end;
+		return E_FAIL;
 
-	m_hStart = CreateWindowEx(0, wcex.lpszClassName, NULL,
+	hStartWnd = CreateWindowEx(0, TEXT("Start"), NULL,
 		WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
-		0, 0, 0, 0, hWndParent, NULL, wcex.hInstance, NULL);
-	if (!m_hStart)
-		goto end;
+		0, 0, 0, 0, hTaskbarWnd, NULL, g_hDllInst, NULL);
+	if (!hStartWnd)
+		return E_FAIL;
 
-	m_wpOrigTaskbarProc = (WNDPROC)SetWindowLongPtr(
-		m_hTaskbar, GWLP_WNDPROC, (LONG_PTR)TaskbarProc);
-	if (!m_wpOrigTaskbarProc)
-		goto end;
+	wpOrigRebarProc = (WNDPROC)SetWindowLongPtr(hRebarWnd,
+		GWLP_WNDPROC, (LONG_PTR)RebarProc);
+	if (!wpOrigRebarProc)
+		return E_FAIL;
 
-	hr = S_OK;
+	wpOrigTaskbarProc = (WNDPROC)SetWindowLongPtr(hTaskbarWnd,
+		GWLP_WNDPROC, (LONG_PTR)TaskbarProc);
+	if (!wpOrigTaskbarProc)
+		return E_FAIL;
 
-end:
-	return hr;
+	return CreatePane();
+}
+
+void ShowStart(BOOL fShow, DWORD dwBandID)
+{
+	LRESULT index;
+
+	if (hStartWnd)
+	{
+		index = SendMessage(hRebarWnd, RB_IDTOINDEX, dwBandID, 0);
+		SendMessage(hRebarWnd, RB_SHOWBAND, index, FALSE); //hide this band
+		SendMessage(hTaskbarWnd, WM_SIZE, 0, 0);
+		ShowWindow(hStartWnd, fShow ? SW_SHOW : SW_HIDE);
+	}
+}
+
+void UpdateStart()
+{
+	if (hStartWnd)
+	{
+		InvalidateRect(hStartWnd, NULL, TRUE);
+		UpdateWindow(hStartWnd);
+	}
 }
 
 void CloseStart()
 {
-	if (m_wpOrigTaskbarProc)
+	ClosePane();
+
+	if (wpOrigWorkerwProc)
 	{
-		SetWindowLongPtr(m_hTaskbar, GWLP_WNDPROC, (LONG_PTR)m_wpOrigTaskbarProc);
-		m_wpOrigTaskbarProc = NULL;
+		SetWindowLongPtr(hWorkerwWnd, GWLP_WNDPROC,
+			(LONG_PTR)wpOrigWorkerwProc);
+		wpOrigWorkerwProc = NULL;
 	}
 
-	if (m_hStart)
+	if (hWorkerwWnd)
 	{
-		ShowWindow(m_hStart, SW_HIDE);
-		DestroyWindow(m_hStart);
-		m_hStart = NULL;
+		OnTaskbarShowEdgeui(TRUE);
+		hWorkerwWnd = NULL;
 	}
 
-	UnregisterClass(_T("Start"), g_hDllInst);
+	if (hWorkervWnd)
+	{
+		ShowWindow(hWorkervWnd, SW_SHOW);
+		hWorkervWnd = NULL;
+	}
 
-	PostMessage(m_hTaskbar, WM_TIMER, 24, 0);
+	if (wpOrigProgmanProc)
+	{
+		SetWindowLongPtr(hProgmanWnd, GWLP_WNDPROC,
+			(LONG_PTR)wpOrigProgmanProc);
+		wpOrigProgmanProc = NULL;
+	}
+
+	if (wpOrigTaskbarProc)
+	{
+		SetWindowLongPtr(hTaskbarWnd, GWLP_WNDPROC,
+			(LONG_PTR)wpOrigTaskbarProc);
+		wpOrigTaskbarProc = NULL;
+	}
+
+	if (wpOrigRebarProc)
+	{
+		SetWindowLongPtr(hRebarWnd, GWLP_WNDPROC,
+			(LONG_PTR)wpOrigRebarProc);
+		wpOrigRebarProc = NULL;
+	}
+
+	if (hStartWnd)
+	{
+		DestroyWindow(hStartWnd);
+		hStartWnd = NULL;
+	}
+
+	if (hStartIcon32)
+	{
+		DestroyIcon(hStartIcon32);
+		hStartIcon32 = NULL;
+	}
+
+	if (hStartIcon16)
+	{
+		DestroyIcon(hStartIcon16);
+		hStartIcon16 = NULL;
+	}
+
+	if (hOrigStartWnd)
+	{
+		ShowWindow(hOrigStartWnd, SW_SHOW);
+		hOrigStartWnd = NULL;
+	}
+
+	UnregisterClass(TEXT("Start"), g_hDllInst);
+
+	PostMessage(hTaskbarWnd, WM_SIZE, 0, 0);
+	PostMessage(hTaskbarWnd, WM_TIMER, 24, 0); //release dll message
 }
 
 //
@@ -88,25 +215,149 @@ static LRESULT CALLBACK StartProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
 {
 	switch (uMsg)
 	{
-	case WM_SHOWWINDOW:
-		OnStartShowWindow(hWnd, (BOOL)wParam);
+	case WM_PAINT:
+		OnStartPaint();
+		break;
+	case WM_THEMECHANGED:
+		InvalidateRect(hWnd, NULL, TRUE);
+		break;
+	case WM_ENABLE:
+		fStartEnabled = (BOOL)wParam;
+		InvalidateRect(hWnd, NULL, TRUE);
+		break;
+	case WM_MOUSELEAVE:
+		fMouseLeftWnd = TRUE;
+		InvalidateRect(hWnd, NULL, TRUE);
+		break;
+	case WM_MOUSEMOVE:
+		OnStartMouseMove();
+		break;
+	case WM_LBUTTONDOWN:
+		ShowPane();
+		break;
+	case WM_RBUTTONUP: //show start screen or start menu
+		PostMessage(hTaskSwWnd, uShellHookMsg, HSHELL_TASKMAN, 0);
+		break;
+	default:
+		return DefWindowProc(hWnd, uMsg, wParam, lParam);
+	}
+
+	return 0;
+}
+
+void OnStartPaint()
+{
+	HDC hdc;
+	PAINTSTRUCT ps;
+	RECT rc;
+	HDC hbufdc;
+	HPAINTBUFFER hbufpt;
+	int x, y, w;
+	HICON hicon;
+
+	hdc = BeginPaint(hStartWnd, &ps);
+	if (hdc)
+	{
+		GetClientRect(hStartWnd, &rc);
+		hbufpt = BeginBufferedPaint(hdc, &rc, BPBF_TOPDOWNDIB, NULL, &hbufdc);
+		if (hbufpt)
+		{
+			DrawThemeParentBackground(hStartWnd, hbufdc, &rc);
+
+			if (!fStartEnabled)
+				BufferedPaintSetAlpha(hbufpt, &rc, 96);
+			else if (!fMouseLeftWnd)
+				BufferedPaintSetAlpha(hbufpt, &rc, 0);
+
+			w = rc.bottom < 32 ? 16 : 32;
+			x = (rc.right - w) / 2;
+			y = (rc.bottom - w) / 2;
+			hicon = rc.bottom < 32 ? hStartIcon16 : hStartIcon32;
+			DrawIconEx(hbufdc, x, y, hicon, w, w, 0, NULL, DI_NORMAL);
+
+			EndBufferedPaint(hbufpt, TRUE);
+		}
+
+		EndPaint(hStartWnd, &ps);
+	}
+}
+
+void OnStartMouseMove()
+{
+	TRACKMOUSEEVENT tme;
+
+	if (fMouseLeftWnd)
+	{
+		fMouseLeftWnd = FALSE;
+		InvalidateRect(hStartWnd, NULL, TRUE);
+
+		tme.cbSize = sizeof(TRACKMOUSEEVENT);
+		tme.dwFlags = TME_LEAVE;
+		tme.dwHoverTime = 10;
+		tme.hwndTrack = hStartWnd;
+		TrackMouseEvent(&tme);
+	}
+}
+
+//
+// Rebar
+//
+static LRESULT CALLBACK RebarProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
+{
+	switch (uMsg)
+	{
+	case WM_WINDOWPOSCHANGING:
+		OnRebarWindowPosChanging(lParam);
+		break;
+	case WM_WINDOWPOSCHANGED:
+		OnRebarWindowPosChanged(lParam);
 		break;
 	default:
 		break;
 	}
 
-	return DefWindowProc(hWnd, uMsg, wParam, lParam);
+	return CallWindowProc(wpOrigRebarProc, hWnd, uMsg, wParam, lParam);
 }
 
-void OnStartShowWindow(HWND hWnd, BOOL fShow)
+void OnRebarWindowPosChanging(LPARAM lParam)
 {
-	LRESULT id;
+	WINDOWPOS *p;
 
-	if (fShow)
+	p = (WINDOWPOS *)lParam;
+	if (p->x == 0)
 	{
-		id = SendMessage(m_hRebar, RB_IDTOINDEX, g_dwBandID, 0);
-		SendMessage(m_hRebar, RB_SHOWBAND, (WPARAM)id, FALSE);
+		p->cy += p->y;
+		p->y = 48;
+		p->cy -= p->y;
 	}
+	else
+	{
+		p->cx += p->x;
+		p->x = 48;
+		if (p->cy < 40)
+			p->x = 36;
+		p->cx -= p->x;
+	}
+}
+
+void OnRebarWindowPosChanged(LPARAM lParam)
+{
+	WINDOWPOS *p;
+	int w, h;
+
+	p = (WINDOWPOS *)lParam;
+	if (p->x == 0)
+	{
+		w = p->cx;
+		h = p->y;
+	}
+	else
+	{
+		w = p->x;
+		h = p->cy;
+	}
+
+	MoveWindow(hStartWnd, 0, 0, w, h, TRUE);
 }
 
 //
@@ -116,45 +367,143 @@ static LRESULT CALLBACK TaskbarProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM 
 {
 	switch (uMsg)
 	{
-	case 0x0579:
-		OnTaskbarShowDesktop(hWnd);
+	case 0x0579: //switch window will receive this
+		OnTaskbarEnterDesktop();
+		break;
+	case 0x05b3: //win8.0 explorer launch will receive this
+		fEnterDesktop = TRUE;
+	case 0x0550: //this band launch will receive this
+		OnTaskbarSetWindowProc();
+		break;
+	case 0x05bb: //switch to start screen or desktop will receive this
+		OnTaskbarShowEdgeui((BOOL)wParam);
 		break;
 	default:
 		break;
 	}
 
-	return CallWindowProc(m_wpOrigTaskbarProc, hWnd, uMsg, wParam, lParam);
+	return CallWindowProc(wpOrigTaskbarProc, hWnd, uMsg, wParam, lParam);
 }
 
-void OnTaskbarShowDesktop(HWND hWnd)
+void OnTaskbarEnterDesktop()
 {
-	HRESULT hr;
-	IAppVisibility *pav;
-	BOOL flv;
-
-	pav = NULL;
-
-	if (!m_fShowDesktop)
-		return;
-
-	hr = CoCreateInstance(CLSID_AppVisibility, NULL, CLSCTX_INPROC_SERVER,
-		IID_IAppVisibility, (LPVOID *)&pav);
-	if (SUCCEEDED(hr))
+	if (fEnterDesktop)
 	{
-		hr = pav->IsLauncherVisible(&flv);
-		if (SUCCEEDED(hr))
+		fEnterDesktop = FALSE;
+		SetForegroundWindow(hTaskbarWnd);
+	}
+}
+
+void OnTaskbarSetWindowProc()
+{
+	HMODULE hdll;
+	HMODULE hproc;
+	LONG_PTR lproc;
+	HWND hwnd;
+
+	if (!wpOrigProgmanProc)
+	{
+		hProgmanWnd = GetShellWindow();
+		if (!hProgmanWnd)
+			return;
+		
+		wpOrigProgmanProc = (WNDPROC)SetWindowLongPtr(hProgmanWnd,
+			GWLP_WNDPROC, (LONG_PTR)ProgmanProc);
+	}
+
+	if (!hWorkervWnd)
+	{
+		hWorkervWnd = FindWindowEx(hProgmanWnd, NULL, TEXT("WorkerW"), NULL);
+		if (hWorkervWnd)
+			ShowWindow(hWorkervWnd, SW_HIDE);
+	}
+
+	if (!wpOrigWorkerwProc)
+	{
+		hdll = GetModuleHandle(TEXT("twinui.appcore.dll")); //win8.1
+		if (!hdll)
 		{
-			m_fShowDesktop = FALSE;
-			if (flv)
+			hdll = GetModuleHandle(TEXT("twinui.dll")); //win8.0
+			if (!hdll)
+				return;
+		}
+
+		hwnd = NULL;
+		for (;;)
+		{
+			hwnd = FindWindowEx(NULL, hwnd, TEXT("WorkerW"), NULL);
+			if (!hwnd)
+				break;
+
+			lproc = GetWindowLongPtr(hwnd, GWLP_WNDPROC);
+			if (GetModuleHandleEx(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+				(LPCWSTR)lproc, &hproc))
 			{
-				SetForegroundWindow(hWnd);
+				if (hproc == hdll)
+					hWorkerwWnd = hwnd;
+				FreeLibrary(hproc);
 			}
+		}
+		if (!hWorkerwWnd)
+			return;
+		
+		wpOrigWorkerwProc = (WNDPROC)SetWindowLongPtr(hWorkerwWnd,
+			GWLP_WNDPROC, (LONG_PTR)WorkerwProc);
+		if (!wpOrigWorkerwProc)
+			return;
+
+		if (!fEnterDesktop)
+			OnTaskbarShowEdgeui(FALSE);
+	}
+}
+
+void OnTaskbarShowEdgeui(BOOL fShow)
+{
+	LPARAM lparam;
+
+	if (hWorkerwWnd)
+	{
+		lparam = (LPARAM)hTaskbarWnd;
+		fInterceptMsg = FALSE; //0x35|0x36: enter|exit fullscreen edgeui will be hide|show
+		SendMessage(hWorkerwWnd, uShellHookMsg, fShow ? 0x36 : 0x35, lparam);
+		SendMessage(hWorkerwWnd, uShellHookMsg, HSHELL_RUDEAPPACTIVATED, lparam);
+		fInterceptMsg = TRUE;
+	}
+}
+
+//
+// Progman
+//
+static LRESULT CALLBACK ProgmanProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
+{
+	if (uMsg == WM_SYSCOMMAND && wParam == SC_TASKLIST) //press win key
+	{
+		ShowPane();
+		return 0;
+	}
+
+	return CallWindowProc(wpOrigProgmanProc, hWnd, uMsg, wParam, lParam);
+}
+
+//
+// Workerw
+//
+static LRESULT CALLBACK WorkerwProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
+{
+	if (uMsg == uShellHookMsg)
+	{
+		switch (wParam)
+		{
+		case 0x35:
+		case 0x36:
+		case HSHELL_RUDEAPPACTIVATED:
+			if (fInterceptMsg)
+				return 0;
+			break;
+		default:
+			break;
 		}
 	}
 
-	if (pav)
-	{
-		pav->Release();
-		pav = NULL;
-	}
+	return CallWindowProc(wpOrigWorkerwProc, hWnd, uMsg, wParam, lParam);
 }

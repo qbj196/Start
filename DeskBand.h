@@ -47,6 +47,6 @@ protected:
 	~CDeskBand();
 private:
 	LONG m_cRef;
-	BOOL m_fIsDirty;
+	DWORD m_dwBandID;
 	BOOL m_fCompositionEnabled;
 };

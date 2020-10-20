@@ -1,12 +1,13 @@
-﻿#include <Windows.h>
-#include <tchar.h>
+#include <Windows.h>
 #include <ShlObj.h>
 #include "ClassFactory.h"
+#include "Resource.h"
 
 
 HINSTANCE	g_hDllInst = NULL;
-LONG		g_cDllRef = NULL;
-CLSID		g_StartID = {0x3f6953f0, 0x5359, 0x47fc, {0xbd, 0x99, 0x9f, 0x2c, 0xb9, 0x5a, 0x62, 0xff}};
+LONG		g_cDllRef = 0;
+CLSID		CLSID_Start = {0x3f6953f0, 0x5359, 0x47fc, {0xbd, 0x99, 0x9f, 0x2c, 0xb9, 0x5a, 0x62, 0xff}};
+TCHAR		szStartKey[] = TEXT("CLSID\\{3F6953F0-5359-47FC-BD99-9F2CB95A62FF}");
 
 
 STDAPI_(BOOL) DllMain(HINSTANCE hInstance, DWORD dwReason, LPVOID lpReserved)
@@ -14,21 +15,21 @@ STDAPI_(BOOL) DllMain(HINSTANCE hInstance, DWORD dwReason, LPVOID lpReserved)
 	if (dwReason == DLL_PROCESS_ATTACH)
 	{
 		g_hDllInst = hInstance;
-		DisableThreadLibraryCalls(hInstance);
+		DisableThreadLibraryCalls(g_hDllInst);
 	}
 
 	return TRUE;
 }
 
-STDAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, void **ppv)
+STDAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, LPVOID *ppv)
 {
 	HRESULT hr;
 	CClassFactory *pcf;
 
 	hr = CLASS_E_CLASSNOTAVAILABLE;
-	pcf = NULL;
+	*ppv = NULL;
 
-	if (IsEqualCLSID(g_StartID, rclsid))
+	if (IsEqualCLSID(CLSID_Start, rclsid))
 	{
 		hr = E_OUTOFMEMORY;
 
@@ -52,98 +53,59 @@ STDAPI DllRegisterServer()
 {
 	HRESULT hr;
 	LSTATUS ls;
-	TCHAR szSubKey[MAX_PATH];
-	TCHAR szData[MAX_PATH];
-	DWORD cbData;
-	HKEY hKey;
+	HKEY hkey;
+	TCHAR sz[MAX_PATH];
+	DWORD cb;
 	ICatRegister *pcr;
 	CATID catid;
 
 	hr = E_FAIL;
-	hKey = NULL;
+	hkey = NULL;
 	pcr = NULL;
 
-	wsprintf(szSubKey,
-		_T("CLSID\\{%08X-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X}"),
-		g_StartID.Data1, g_StartID.Data2, g_StartID.Data3,
-		g_StartID.Data4[0], g_StartID.Data4[1], g_StartID.Data4[2],
-		g_StartID.Data4[3], g_StartID.Data4[4], g_StartID.Data4[5],
-		g_StartID.Data4[6], g_StartID.Data4[7]);
-
-	ls = RegCreateKeyEx(HKEY_CLASSES_ROOT, szSubKey, 0, NULL,
-		REG_OPTION_NON_VOLATILE, KEY_WRITE, NULL, &hKey, NULL);
+	ls = RegCreateKeyEx(HKEY_CLASSES_ROOT, szStartKey, 0, NULL,
+		REG_OPTION_NON_VOLATILE, KEY_WRITE, NULL, &hkey, NULL);
 	if (ls != ERROR_SUCCESS)
-	{
 		goto end;
-	}
 
-	lstrcpy(szData, _T("开始(&S)"));
-	cbData = lstrlen(szData) * sizeof(TCHAR);
-	ls = RegSetValueEx(hKey, NULL, 0, REG_SZ, (BYTE *)szData, cbData);
-	if (ls != ERROR_SUCCESS)
-	{
+	cb = LoadString(g_hDllInst, IDS_START, sz, MAX_PATH);
+	if (GetLastError() != ERROR_SUCCESS)
 		goto end;
-	}
 
-	ls = RegCloseKey(hKey);
+	cb *= sizeof(TCHAR);
+	ls = RegSetKeyValue(hkey, NULL, NULL, REG_SZ, sz, cb);
 	if (ls != ERROR_SUCCESS)
-	{
 		goto end;
-	}
-	hKey = NULL;
-
-	lstrcat(szSubKey, _T("\\InprocServer32"));
-	ls = RegCreateKeyEx(HKEY_CLASSES_ROOT, szSubKey, 0, NULL,
-		REG_OPTION_NON_VOLATILE, KEY_WRITE, NULL, &hKey, NULL);
-	if (ls != ERROR_SUCCESS)
-	{
-		goto end;
-	}
 	
-	cbData = GetModuleFileName(g_hDllInst, szData, ARRAYSIZE(szData));
-	if (0 != GetLastError())
-	{
+	cb = GetModuleFileName(g_hDllInst, sz, MAX_PATH);
+	if (GetLastError() != ERROR_SUCCESS)
 		goto end;
-	}
-	cbData *= sizeof(TCHAR);
 
-	ls = RegSetValueEx(hKey, NULL, 0, REG_SZ, (BYTE *)szData, cbData);
+	cb *= sizeof(TCHAR);
+	ls = RegSetKeyValue(hkey, TEXT("InprocServer32"), NULL, REG_SZ, sz, cb);
 	if (ls != ERROR_SUCCESS)
-	{
 		goto end;
-	}
 
-	lstrcpy(szSubKey, _T("ThreadingModel"));
-	lstrcpy(szData, _T("Apartment"));
-	cbData = lstrlen(szData) + 1;
-	cbData *= sizeof(TCHAR);
-	ls = RegSetValueEx(hKey, szSubKey, 0, REG_SZ, (BYTE *)szData, cbData);
+	lstrcpy(sz, TEXT("Apartment"));
+	cb = lstrlen(sz) * sizeof(TCHAR);
+	ls = RegSetKeyValue(hkey, TEXT("InprocServer32"), TEXT("ThreadingModel"),
+		REG_SZ, sz, cb);
 	if (ls != ERROR_SUCCESS)
-	{
 		goto end;
-	}
 
 	hr = CoCreateInstance(CLSID_StdComponentCategoriesMgr, NULL,
 		CLSCTX_INPROC_SERVER, IID_ICatRegister, (LPVOID *)&pcr);
 	if (FAILED(hr))
-	{
 		goto end;
-	}
 
 	catid = CATID_DeskBand;
-	hr = pcr->RegisterClassImplCategories(g_StartID, 1, &catid);
+	hr = pcr->RegisterClassImplCategories(CLSID_Start, 1, &catid);
 
 end:
 	if (pcr)
-	{
 		pcr->Release();
-		pcr = NULL;
-	}
-	if (hKey)
-	{
-		RegCloseKey(hKey);
-		hKey = NULL;
-	}
+	if (hkey)
+		RegCloseKey(hkey);
 
 	return hr;
 }
@@ -151,47 +113,30 @@ end:
 STDAPI DllUnregisterServer()
 {
 	HRESULT hr;
-	LSTATUS ls;
-	TCHAR szSubKey[MAX_PATH];
 	ICatRegister *pcr;
 	CATID catid;
+	LSTATUS ls;
 
 	hr = E_FAIL;
 	pcr = NULL;
 
-	wsprintf(szSubKey,
-		_T("CLSID\\{%08X-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X}"),
-		g_StartID.Data1, g_StartID.Data2, g_StartID.Data3,
-		g_StartID.Data4[0], g_StartID.Data4[1], g_StartID.Data4[2],
-		g_StartID.Data4[3], g_StartID.Data4[4], g_StartID.Data4[5],
-		g_StartID.Data4[6], g_StartID.Data4[7]);
-
 	hr = CoCreateInstance(CLSID_StdComponentCategoriesMgr, NULL,
 		CLSCTX_INPROC_SERVER, IID_ICatRegister, (LPVOID *)&pcr);
 	if (FAILED(hr))
-	{
 		goto end;
-	}
 
 	catid = CATID_DeskBand;
-	hr = pcr->UnRegisterClassImplCategories(g_StartID, 1, &catid);
+	hr = pcr->UnRegisterClassImplCategories(CLSID_Start, 1, &catid);
 	if (FAILED(hr))
-	{
 		goto end;
-	}
 
-	ls = RegDeleteTree(HKEY_CLASSES_ROOT, szSubKey);
+	ls = RegDeleteTree(HKEY_CLASSES_ROOT, szStartKey);
 	if (ls != ERROR_SUCCESS)
-	{
 		hr = E_FAIL;
-	}
 
 end:
 	if (pcr)
-	{
 		pcr->Release();
-		pcr = NULL;
-	}
 
 	return hr;
 }
