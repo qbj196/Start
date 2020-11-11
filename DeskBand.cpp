@@ -2,7 +2,7 @@
 #include "Start.h"
 
 
-extern LONG g_cDllRef;
+extern LONG cDllRef;
 extern CLSID CLSID_Start;
 
 
@@ -12,12 +12,12 @@ CDeskBand::CDeskBand()
 	m_dwBandID = 0;
 	m_fCompositionEnabled = FALSE;
 
-	InterlockedIncrement(&g_cDllRef);
+	InterlockedIncrement(&cDllRef);
 }
 
 CDeskBand::~CDeskBand()
 {
-	InterlockedDecrement(&g_cDllRef);
+	InterlockedDecrement(&cDllRef);
 }
 
 //

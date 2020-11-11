@@ -2,19 +2,19 @@
 #include "DeskBand.h"
 
 
-extern LONG g_cDllRef;
+extern LONG cDllRef;
 
 
 CClassFactory::CClassFactory()
 {
 	m_cRef = 1;
 
-	InterlockedIncrement(&g_cDllRef);
+	InterlockedIncrement(&cDllRef);
 }
 
 CClassFactory::~CClassFactory()
 {
-	InterlockedDecrement(&g_cDllRef);
+	InterlockedDecrement(&cDllRef);
 }
 
 //
@@ -85,9 +85,9 @@ STDMETHODIMP CClassFactory::CreateInstance(IUnknown *pUnkOuter, REFIID riid, voi
 STDMETHODIMP CClassFactory::LockServer(BOOL fLock)
 {
 	if (fLock)
-		InterlockedIncrement(&g_cDllRef);
+		InterlockedIncrement(&cDllRef);
 	else
-		InterlockedDecrement(&g_cDllRef);
+		InterlockedDecrement(&cDllRef);
 
 	return S_OK;
 }

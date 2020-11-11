@@ -1,7 +1,6 @@
 #pragma once
 
 #include <Windows.h>
-#include <ShlObj.h>
 #include <Uxtheme.h>
 
 #pragma comment(lib, "uxtheme.lib")

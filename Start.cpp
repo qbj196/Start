@@ -3,20 +3,22 @@
 #include "Resource.h"
 
 
-extern HINSTANCE g_hDllInst;
-
-HWND hOrigStartWnd = NULL;
+extern HINSTANCE hDllInst;
+extern DWORD dwDisableMetro;
 HWND hStartWnd = NULL;
 HWND hRebarWnd = NULL;
-HWND hTaskSwWnd = NULL;
 HWND hTaskbarWnd = NULL;
+HWND hSyslistWnd = NULL;
+
+HWND hTaskSwWnd = NULL;
 HWND hProgmanWnd = NULL;
-HWND hWorkervWnd = NULL;
 HWND hWorkerwWnd = NULL;
+HWND hNetworkWnd = NULL;
+HWND hOrigStartWnd = NULL;
 BOOL fEnterDesktop = FALSE;
 BOOL fStartEnabled = TRUE;
 BOOL fMouseLeftWnd = TRUE;
-BOOL fInterceptMsg = FALSE;
+BOOL fPreShowDesktop = TRUE;
 UINT uShellHookMsg = 0;
 HICON hStartIcon16 = NULL;
 HICON hStartIcon32 = NULL;
@@ -24,6 +26,7 @@ WNDPROC wpOrigRebarProc = NULL;
 WNDPROC wpOrigTaskbarProc = NULL;
 WNDPROC wpOrigProgmanProc = NULL;
 WNDPROC wpOrigWorkerwProc = NULL;
+WNDPROC wpOrigNetworkProc = NULL;
 
 
 // Start
@@ -48,6 +51,9 @@ static LRESULT CALLBACK ProgmanProc(HWND, UINT, WPARAM, LPARAM);
 // Workerw
 static LRESULT CALLBACK WorkerwProc(HWND, UINT, WPARAM, LPARAM);
 
+// Network
+static LRESULT CALLBACK NetworkProc(HWND, UINT, WPARAM, LPARAM);
+
 
 HRESULT CreateStart(HWND hWnd)
 {
@@ -63,17 +69,17 @@ HRESULT CreateStart(HWND hWnd)
 	hTaskSwWnd = FindWindowEx(hRebarWnd, NULL, TEXT("MSTaskSwWClass"), NULL);
 	if (!hTaskSwWnd)
 		return E_FAIL;
-	
+
 	hOrigStartWnd = FindWindowEx(hTaskbarWnd, NULL, TEXT("Start"), NULL);
 	if (hOrigStartWnd)
 		ShowWindow(hOrigStartWnd, SW_HIDE);
 
-	hStartIcon16 = (HICON)LoadImage(g_hDllInst, MAKEINTRESOURCE(IDI_START),
+	hStartIcon16 = (HICON)LoadImage(hDllInst, MAKEINTRESOURCE(IDI_START),
 		IMAGE_ICON, 16, 16, LR_DEFAULTCOLOR);
 	if (!hStartIcon16)
 		return E_FAIL;
 
-	hStartIcon32 = (HICON)LoadImage(g_hDllInst, MAKEINTRESOURCE(IDI_START),
+	hStartIcon32 = (HICON)LoadImage(hDllInst, MAKEINTRESOURCE(IDI_START),
 		IMAGE_ICON, 32, 32, LR_DEFAULTCOLOR);
 	if (!hStartIcon32)
 		return E_FAIL;
@@ -85,7 +91,7 @@ HRESULT CreateStart(HWND hWnd)
 	wcex.hCursor		= LoadCursor(NULL, IDC_ARROW);
 	wcex.hIcon			= NULL;
 	wcex.hIconSm		= NULL;
-	wcex.hInstance		= g_hDllInst;
+	wcex.hInstance		= hDllInst;
 	wcex.lpfnWndProc	= StartProc;
 	wcex.lpszClassName	= TEXT("Start");
 	wcex.lpszMenuName	= NULL;
@@ -95,10 +101,10 @@ HRESULT CreateStart(HWND hWnd)
 
 	hStartWnd = CreateWindowEx(0, TEXT("Start"), NULL,
 		WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
-		0, 0, 0, 0, hTaskbarWnd, NULL, g_hDllInst, NULL);
+		0, 0, 0, 0, hTaskbarWnd, NULL, hDllInst, NULL);
 	if (!hStartWnd)
 		return E_FAIL;
-
+	
 	wpOrigRebarProc = (WNDPROC)SetWindowLongPtr(hRebarWnd,
 		GWLP_WNDPROC, (LONG_PTR)RebarProc);
 	if (!wpOrigRebarProc)
@@ -138,23 +144,20 @@ void CloseStart()
 {
 	ClosePane();
 
+	OnTaskbarShowEdgeui(TRUE);
+
+	if (wpOrigNetworkProc)
+	{
+		SetWindowLongPtr(hNetworkWnd, GWLP_WNDPROC,
+			(LONG_PTR)wpOrigNetworkProc);
+		wpOrigNetworkProc = NULL;
+	}
+
 	if (wpOrigWorkerwProc)
 	{
 		SetWindowLongPtr(hWorkerwWnd, GWLP_WNDPROC,
 			(LONG_PTR)wpOrigWorkerwProc);
 		wpOrigWorkerwProc = NULL;
-	}
-
-	if (hWorkerwWnd)
-	{
-		OnTaskbarShowEdgeui(TRUE);
-		hWorkerwWnd = NULL;
-	}
-
-	if (hWorkervWnd)
-	{
-		ShowWindow(hWorkervWnd, SW_SHOW);
-		hWorkervWnd = NULL;
 	}
 
 	if (wpOrigProgmanProc)
@@ -202,10 +205,10 @@ void CloseStart()
 		hOrigStartWnd = NULL;
 	}
 
-	UnregisterClass(TEXT("Start"), g_hDllInst);
+	UnregisterClass(TEXT("Start"), hDllInst);
 
 	PostMessage(hTaskbarWnd, WM_SIZE, 0, 0);
-	PostMessage(hTaskbarWnd, WM_TIMER, 24, 0); //release dll message
+	PostMessage(hTaskbarWnd, WM_TIMER, 24, 0); //explorer release unuse dll
 }
 
 //
@@ -372,7 +375,14 @@ static LRESULT CALLBACK TaskbarProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM 
 		break;
 	case 0x05b3: //win8.0 explorer launch will receive this
 		fEnterDesktop = TRUE;
+		break;
+	case 0x0565: //win8.1 explorer launch will receive this
+		fPreShowDesktop = FALSE;
+		break;
+	case 0x0574:
+		if (lParam == 0x10000) //desktop has show will receive this
 	case 0x0550: //this band launch will receive this
+	case 0x0590: //win8.0 and 8.1 explorer launch will receive this
 		OnTaskbarSetWindowProc();
 		break;
 	case 0x05bb: //switch to start screen or desktop will receive this
@@ -396,10 +406,10 @@ void OnTaskbarEnterDesktop()
 
 void OnTaskbarSetWindowProc()
 {
+	HWND hwnd;
 	HMODULE hdll;
 	HMODULE hproc;
 	LONG_PTR lproc;
-	HWND hwnd;
 
 	if (!wpOrigProgmanProc)
 	{
@@ -409,13 +419,34 @@ void OnTaskbarSetWindowProc()
 		
 		wpOrigProgmanProc = (WNDPROC)SetWindowLongPtr(hProgmanWnd,
 			GWLP_WNDPROC, (LONG_PTR)ProgmanProc);
+
+		hwnd = FindWindowEx(hProgmanWnd, NULL, TEXT("SHELLDLL_DefView"), NULL);
+		if (hwnd)
+			hSyslistWnd = FindWindowEx(hwnd, NULL, TEXT("SysListView32"), NULL);
+
+		if (fPreShowDesktop)
+			PostMessage(hProgmanWnd, 0x045c, 3, 7); //win8.0 pre-show desktop
+
+		if (dwDisableMetro)
+		{
+			PostMessage(hTaskbarWnd, 0x0574, 2, 0); //show taskbar and desktop
+			PostMessage(hTaskbarWnd, 0x05ba, 0, 0); //enable show desktop and open windows
+		}
 	}
 
-	if (!hWorkervWnd)
+	if (dwDisableMetro)
 	{
-		hWorkervWnd = FindWindowEx(hProgmanWnd, NULL, TEXT("WorkerW"), NULL);
-		if (hWorkervWnd)
-			ShowWindow(hWorkervWnd, SW_HIDE);
+		if (!wpOrigNetworkProc)
+		{
+			hNetworkWnd = FindWindowEx(NULL, NULL, NULL, TEXT("Network Flyout"));
+			if (!hNetworkWnd)
+				return;
+
+			wpOrigNetworkProc = (WNDPROC)SetWindowLongPtr(hNetworkWnd,
+				GWLP_WNDPROC, (LONG_PTR)NetworkProc);
+		}
+
+		return;
 	}
 
 	if (!wpOrigWorkerwProc)
@@ -436,12 +467,12 @@ void OnTaskbarSetWindowProc()
 				break;
 
 			lproc = GetWindowLongPtr(hwnd, GWLP_WNDPROC);
-			if (GetModuleHandleEx(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
-				(LPCWSTR)lproc, &hproc))
+			if (GetModuleHandleEx(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+				GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCTSTR)lproc,
+				&hproc))
 			{
 				if (hproc == hdll)
 					hWorkerwWnd = hwnd;
-				FreeLibrary(hproc);
 			}
 		}
 		if (!hWorkerwWnd)
@@ -449,25 +480,29 @@ void OnTaskbarSetWindowProc()
 		
 		wpOrigWorkerwProc = (WNDPROC)SetWindowLongPtr(hWorkerwWnd,
 			GWLP_WNDPROC, (LONG_PTR)WorkerwProc);
-		if (!wpOrigWorkerwProc)
-			return;
-
-		if (!fEnterDesktop)
-			OnTaskbarShowEdgeui(FALSE);
 	}
+	
+	OnTaskbarShowEdgeui(FALSE);
 }
 
 void OnTaskbarShowEdgeui(BOOL fShow)
 {
+	HWND hwnd;
 	LPARAM lparam;
+
+	if (hProgmanWnd)
+	{
+		hwnd = FindWindowEx(hProgmanWnd, NULL, TEXT("WorkerW"), NULL);
+		if (hwnd)
+			ShowWindow(hwnd, fShow ? SW_SHOW : SW_HIDE);
+	}
 
 	if (hWorkerwWnd)
 	{
 		lparam = (LPARAM)hTaskbarWnd;
-		fInterceptMsg = FALSE; //0x35|0x36: enter|exit fullscreen edgeui will be hide|show
-		SendMessage(hWorkerwWnd, uShellHookMsg, fShow ? 0x36 : 0x35, lparam);
-		SendMessage(hWorkerwWnd, uShellHookMsg, HSHELL_RUDEAPPACTIVATED, lparam);
-		fInterceptMsg = TRUE;
+		//0x35|0x36: enter|exit fullscreen edgeui will be hide|show
+		PostMessage(hWorkerwWnd, uShellHookMsg, fShow ? 0x36 : 0x35, lparam);
+		PostMessage(hWorkerwWnd, uShellHookMsg, HSHELL_RUDEAPPACTIVATED, lparam);
 	}
 }
 
@@ -497,7 +532,7 @@ static LRESULT CALLBACK WorkerwProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM 
 		case 0x35:
 		case 0x36:
 		case HSHELL_RUDEAPPACTIVATED:
-			if (fInterceptMsg)
+			if (lParam != (LPARAM)hTaskbarWnd)
 				return 0;
 			break;
 		default:
@@ -506,4 +541,31 @@ static LRESULT CALLBACK WorkerwProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM 
 	}
 
 	return CallWindowProc(wpOrigWorkerwProc, hWnd, uMsg, wParam, lParam);
+}
+
+//
+// Network
+//
+static LRESULT CALLBACK NetworkProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
+{
+	DWORD dw;
+	static TCHAR *psz = NULL;
+
+	dw = LOWORD(lParam);
+	if (dw == WM_LBUTTONDOWN)
+	{
+		psz = TEXT("shell:::{7007ACC7-3202-11D1-AAD2-00805FC1270E}");
+		return 0;
+	}
+	if (dw == WM_LBUTTONUP)
+	{
+		if (psz)
+		{
+			ShellExecute(NULL, NULL, psz, NULL, NULL, SW_SHOW);
+			psz = NULL;
+		}
+		return 0;
+	}
+
+	return CallWindowProc(wpOrigNetworkProc, hWnd, uMsg, wParam, lParam);
 }
