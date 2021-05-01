@@ -25,37 +25,32 @@ CDeskBand::~CDeskBand()
 //
 STDMETHODIMP CDeskBand::QueryInterface(REFIID riid, void **ppvObject)
 {
-	HRESULT hr;
-
-	hr = S_OK;
-
-	if (IsEqualIID(IID_IUnknown, riid)			||
-		IsEqualIID(IID_IOleWindow, riid)		||
-		IsEqualIID(IID_IDockingWindow, riid)	||
-		IsEqualIID(IID_IDeskBand, riid)			||
-		IsEqualIID(IID_IDeskBand2, riid))
-	{
-		*ppvObject = static_cast<IOleWindow *>(this);
-	}
-	else if (IsEqualIID(IID_IPersist, riid) ||
-		IsEqualIID(IID_IPersistStream, riid))
-	{
-		*ppvObject = static_cast<IPersist *>(this);
-	}
-	else if (IsEqualIID(IID_IObjectWithSite, riid))
-	{
-		*ppvObject = static_cast<IObjectWithSite *>(this);
-	}
+	if (IsEqualIID(riid, IID_IUnknown))
+		*ppvObject = this;
+	else if (IsEqualIID(riid, IID_IOleWindow))
+		*ppvObject = (IOleWindow *)this;
+	else if (IsEqualIID(riid, IID_IDockingWindow))
+		*ppvObject = (IDockingWindow *)this;
+	else if (IsEqualIID(riid, IID_IDeskBand))
+		*ppvObject = (IDeskBand *)this;
+	else if (IsEqualIID(riid, IID_IDeskBand2))
+		*ppvObject = (IDeskBand2 *)this;
+	else if (IsEqualIID(riid, IID_IPersist))
+		*ppvObject = (IPersist *)this;
+	else if (IsEqualIID(riid, IID_IPersistStream))
+		*ppvObject = (IPersistStream *)this;
+	else if (IsEqualIID(riid, IID_IObjectWithSite))
+		*ppvObject = (IObjectWithSite *)this;
 	else
-	{
-		hr = E_NOINTERFACE;
 		*ppvObject = NULL;
-	}
 
 	if (*ppvObject)
+	{
 		AddRef();
+		return S_OK;
+	}
 
-	return hr;
+	return E_NOINTERFACE;
 }
 
 STDMETHODIMP_(ULONG) CDeskBand::AddRef()
@@ -118,7 +113,7 @@ STDMETHODIMP CDeskBand::GetBandInfo(DWORD dwBandID, DWORD dwViewMode, DESKBANDIN
 {
 	m_dwBandID = dwBandID;
 
-	return E_NOTIMPL;
+	return S_OK;
 }
 
 //
@@ -190,17 +185,14 @@ STDMETHODIMP CDeskBand::SetSite(IUnknown *pUnkSite)
 	HWND hwnd;
 
 	hr = E_FAIL;
-
 	if (pUnkSite)
 	{
-		hr = pUnkSite->QueryInterface(IID_IOleWindow,
-			reinterpret_cast<void **>(&pow));
+		hr = pUnkSite->QueryInterface(IID_IOleWindow, (void **)&pow);
 		if (SUCCEEDED(hr))
 		{
 			hr = pow->GetWindow(&hwnd);
 			if (SUCCEEDED(hr))
 				hr = CreateStart(hwnd);
-
 			pow->Release();
 		}
 	}
@@ -208,9 +200,9 @@ STDMETHODIMP CDeskBand::SetSite(IUnknown *pUnkSite)
 	return hr;
 }
 
-STDMETHODIMP CDeskBand::GetSite(REFIID riid, void **ppvSite)
+STDMETHODIMP CDeskBand::GetSite(REFIID, void **ppvSite)
 {
 	*ppvSite = NULL;
 
-	return E_FAIL;
+	return E_NOTIMPL;
 }

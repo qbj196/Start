@@ -33,13 +33,11 @@ STDAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, LPVOID *ppv)
 	HRESULT hr;
 	CClassFactory *pcf;
 
-	hr = CLASS_E_CLASSNOTAVAILABLE;
 	*ppv = NULL;
-
+	hr = CLASS_E_CLASSNOTAVAILABLE;
 	if (IsEqualCLSID(CLSID_Start, rclsid))
 	{
 		hr = E_OUTOFMEMORY;
-
 		pcf = new CClassFactory();
 		if (pcf)
 		{
@@ -54,9 +52,9 @@ STDAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, LPVOID *ppv)
 STDAPI DllRegisterServer()
 {
 	HRESULT hr;
-	LSTATUS ls;
 	TCHAR sz[MAX_PATH];
 	DWORD cb;
+	LSTATUS ls;
 	TCHAR *psz;
 	ICatRegister *pcr;
 	CATID catid;

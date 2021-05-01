@@ -22,22 +22,20 @@ CClassFactory::~CClassFactory()
 //
 STDMETHODIMP CClassFactory::QueryInterface(REFIID riid, void **ppvObject)
 {
-	HRESULT hr;
-
-	hr = S_OK;
-
-	if (IsEqualIID(IID_IUnknown, riid) || IsEqualIID(IID_IClassFactory, riid))
-	{
-		*ppvObject = static_cast<IUnknown *>(this);
-		AddRef();
-	}
+	if (IsEqualIID(riid, IID_IUnknown))
+		*ppvObject = this;
+	else if (IsEqualIID(riid, IID_IClassFactory))
+		*ppvObject = (IClassFactory *)this;
 	else
-	{
-		hr = E_NOINTERFACE;
 		*ppvObject = NULL;
+
+	if (*ppvObject)
+	{
+		AddRef();
+		return S_OK;
 	}
 
-	return hr;
+	return E_NOINTERFACE;
 }
 
 STDMETHODIMP_(ULONG) CClassFactory::AddRef()
@@ -64,13 +62,11 @@ STDMETHODIMP CClassFactory::CreateInstance(IUnknown *pUnkOuter, REFIID riid, voi
 	HRESULT hr;
 	CDeskBand *pdb;
 
-	hr = CLASS_E_NOAGGREGATION;
 	*ppvObject = NULL;
-
+	hr = CLASS_E_NOAGGREGATION;
 	if (!pUnkOuter)
 	{
 		hr = E_OUTOFMEMORY;
-
 		pdb = new CDeskBand();
 		if (pdb)
 		{

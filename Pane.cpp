@@ -9,21 +9,26 @@ extern HWND hStartWnd;
 extern HWND hRebarWnd;
 extern HWND hTaskbarWnd;
 extern HWND hSyslistWnd;
-DWORD dwDisableMetro = 0;
+extern HWND hTrayShowDesktopWnd;
+BOOL fDisableMetro = FALSE;
+BOOL fHideTrayShowDesktop = FALSE;
 
+ATOM atomPane = 0;
 HWND hPaneWnd = NULL;
-HWND hForeWnd = NULL;
 HICON hTabsIcon = NULL;
 HICON hProgsIcon = NULL;
 HFONT hFont = NULL;
-TCHAR szProgs[25][50];
-INT cchProgs[25];
+TCHAR szProgs[27][50];
+INT cchProgs[27];
 INT nTab = 4;
 INT nMouseMove = 0;
 INT nLButtonDown = 0;
 BYTE byFunc[10];
-DWORD dwDisableRibbon = 0;
-DWORD dwUseSmallFont = 0;
+BOOL fUseSmallFont = FALSE;
+BOOL fDisableRibbon = FALSE;
+FILELIST flList = {};
+INT nFirstItem = 0;
+INT nLastItem = 0;
 
 RECT rcPane[24] = {
 	  0,   0,   0,   0,
@@ -50,16 +55,17 @@ RECT rcPane[24] = {
 	 50, 434,  50, 470,//19
 
 	 48, 444, 300, 480,
-	288,   0, 300, 444,//21
+	292,   2, 300, 434,//21
 
 	 48,  36, 144, 432,
-	 52,   0,  84,   0,//23
+	 16,   0,   0,   0,//23
 };
 
 
 // Pane
 static LRESULT CALLBACK PaneProc(HWND, UINT, WPARAM, LPARAM);
 void OnPanePaint();
+void OnPaneMouseWheel(WPARAM);
 void OnPaneMouseMove(LPARAM);
 void OnPaneLButtonDown(LPARAM);
 void OnPaneLButtonUp(LPARAM);
@@ -67,7 +73,12 @@ void OpenExecute(BOOL, WPARAM);
 
 // NewFunc
 HMODULE WINAPI NewFunc(LPCWSTR, HANDLE, DWORD);
-void Hook(PBYTE, PBYTE, PBYTE, DWORD);
+void HookApi(PBYTE, PBYTE, PBYTE, DWORD);
+
+// FileList
+HRESULT GetFileList(FILELIST *);
+void DrawFileList(FILELIST *, HDC*, INT *, BOOL);
+void FreeFileList(FILELIST *);
 
 
 HRESULT CreatePane()
@@ -75,15 +86,34 @@ HRESULT CreatePane()
 	INT i;
 	DWORD cb;
 	TCHAR sz[2];
+	HRESULT hr;
 	WNDCLASSEX wcex;
 
 	cb = sizeof(sz);
 	RegGetValue(HKEY_CURRENT_USER, szImsspKey, NULL, RRF_RT_ANY, NULL, &sz, &cb);
 	if (!lstrcmp(sz, TEXT("\\")))
-		dwDisableMetro = 1;
+		fDisableMetro = TRUE;
 
-	//float f=1.25;for(i=0;i<24;i++){rcPane[i].left*=f;rcPane[i].top*=f;rcPane[i].right*=f;rcPane[i].bottom*=f;}
-	for (i=0; i<25; i++)
+	cb = sizeof(BOOL);
+	RegGetValue(HKEY_CURRENT_USER, szSetupKey, TEXT("UseSmallFont"),
+		RRF_RT_ANY, NULL, &fUseSmallFont, &cb);
+
+	cb = sizeof(BOOL);
+	RegGetValue(HKEY_CURRENT_USER, szSetupKey, TEXT("DisableRibbon"),
+		RRF_RT_ANY, NULL, &fDisableRibbon, &cb);
+	
+	cb = sizeof(BOOL);
+	RegGetValue(HKEY_CURRENT_USER, szSetupKey, TEXT("HideTrayShowDesktop"),
+		RRF_RT_ANY, NULL, &fHideTrayShowDesktop, &cb);
+
+	if (fDisableRibbon)
+		HookApi((PBYTE)NewFunc, (PBYTE)LoadLibraryExW, byFunc, 1);
+
+	if (fHideTrayShowDesktop)
+		InvalidateRect(hTrayShowDesktopWnd, NULL, TRUE);
+
+	//float f=1.5;for(i=0;i<24;i++){rcPane[i].left*=f;rcPane[i].top*=f;rcPane[i].right*=f;rcPane[i].bottom*=f;}
+	for (i=0; i<27; i++)
 		cchProgs[i] = LoadString(hDllInst, i + IDS_PROG1, szProgs[i], 50);
 
 	hTabsIcon = (HICON)LoadImage(hDllInst, MAKEINTRESOURCE(IDI_TABS),
@@ -95,6 +125,16 @@ HRESULT CreatePane()
 		IMAGE_ICON, (int)rcPane[22].top, (int)rcPane[22].bottom, LR_DEFAULTCOLOR);
 	if (!hProgsIcon)
 		return E_FAIL;
+
+	hr = SHGetKnownFolderPath(FOLDERID_Programs, KF_FLAG_DEFAULT,
+		NULL, &flList.pszpath1);
+	if (FAILED(hr))
+		return hr;
+
+	hr = SHGetKnownFolderPath(FOLDERID_CommonPrograms, KF_FLAG_DEFAULT,
+		NULL, &flList.pszpath2);
+	if (FAILED(hr))
+		return hr;
 
 	wcex.cbClsExtra		= 0;
 	wcex.cbSize			= sizeof(WNDCLASSEX);
@@ -108,7 +148,8 @@ HRESULT CreatePane()
 	wcex.lpszClassName	= TEXT("Pane");
 	wcex.lpszMenuName	= NULL;
 	wcex.style			= CS_VREDRAW | CS_HREDRAW;
-	if (!RegisterClassEx(&wcex))
+	atomPane = RegisterClassEx(&wcex);
+	if (!atomPane)
 		return E_FAIL;
 
 	hPaneWnd = CreateWindowEx(WS_EX_TOOLWINDOW | WS_EX_TOPMOST, TEXT("Pane"),
@@ -117,17 +158,6 @@ HRESULT CreatePane()
 	if (!hPaneWnd)
 		return E_FAIL;
 	
-	cb = sizeof(DWORD);
-	RegGetValue(HKEY_CURRENT_USER, szSetupKey, TEXT("UseSmallFont"),
-		RRF_RT_ANY, NULL, &dwUseSmallFont, &cb);
-
-	cb = sizeof(DWORD);
-	RegGetValue(HKEY_CURRENT_USER, szSetupKey, TEXT("DisableRibbon"),
-		RRF_RT_ANY, NULL, &dwDisableRibbon, &cb);
-
-	if (dwDisableRibbon)
-		Hook((PBYTE)NewFunc, (PBYTE)LoadLibraryExW, byFunc, 1);
-
 	return S_OK;
 }
 
@@ -137,13 +167,14 @@ void ShowPane()
 	LONG x, y;
 	int w, h;
 	HWND hwnd;
+	static HWND hforewnd = NULL;
 
 	if (hPaneWnd)
 	{
 		if (IsWindowVisible(hPaneWnd))
 		{
 			ShowWindow(hPaneWnd, SW_HIDE);
-			SetForegroundWindow(hForeWnd);
+			SetForegroundWindow(hforewnd);
 			return;
 		}
 
@@ -168,11 +199,11 @@ void ShowPane()
 		MoveWindow(hPaneWnd, (int)x, (int)y, w, h, TRUE);
 
 		hwnd = hRebarWnd;
-		if (dwUseSmallFont && hSyslistWnd)
+		if (fUseSmallFont && hSyslistWnd)
 			hwnd = hSyslistWnd;
 		hFont = (HFONT)SendMessage(hwnd, WM_GETFONT, 0, 0);
 
-		hForeWnd = GetForegroundWindow();
+		hforewnd = GetForegroundWindow();
 		ShowWindow(hPaneWnd, SW_SHOW);
 		SetForegroundWindow(hPaneWnd);
 	}
@@ -180,17 +211,31 @@ void ShowPane()
 
 void ClosePane()
 {
-	if (dwDisableRibbon)
-	{
-		Hook((PBYTE)NewFunc, (PBYTE)LoadLibraryExW, byFunc, 0);
-		dwDisableRibbon = 0;
-	}
-
 	if (hPaneWnd)
 	{
 		DestroyWindow(hPaneWnd);
 		hPaneWnd = NULL;
 	}
+	
+	if (atomPane)
+	{
+		UnregisterClass(TEXT("Pane"), hDllInst);
+		atomPane = 0;
+	}
+
+	if (flList.pszpath2)
+	{
+		CoTaskMemFree(flList.pszpath2);
+		flList.pszpath2 = NULL;
+	}
+
+	if (flList.pszpath1)
+	{
+		CoTaskMemFree(flList.pszpath1);
+		flList.pszpath1 = NULL;
+	}
+
+	FreeFileList(&flList);
 
 	if (hProgsIcon)
 	{
@@ -204,7 +249,11 @@ void ClosePane()
 		hTabsIcon = NULL;
 	}
 	
-	UnregisterClass(TEXT("Pane"), hDllInst);
+	if (fDisableRibbon)
+	{
+		HookApi((PBYTE)NewFunc, (PBYTE)LoadLibraryExW, byFunc, 0);
+		fDisableRibbon = FALSE;
+	}
 }
 
 //
@@ -230,6 +279,9 @@ static LRESULT CALLBACK PaneProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
 		nMouseMove = 0;
 		nLButtonDown = 0;
 		InvalidateRect(hWnd, NULL, TRUE);
+		break;
+	case WM_MOUSEWHEEL:
+		OnPaneMouseWheel(wParam);
 		break;
 	case WM_MOUSEMOVE:
 		OnPaneMouseMove(lParam);
@@ -261,6 +313,8 @@ void OnPanePaint()
 	HPAINTBUFFER hbufpt;
 	int i, x, y, cx, cy;
 	UINT u;
+	RECT rc;
+	double d;
 
 	hdc = BeginPaint(hPaneWnd, &ps);
 	if (hdc)
@@ -294,37 +348,73 @@ void OnPanePaint()
 			}
 			else if (nTab == 5)
 			{
-				i = dwDisableMetro ? 19 : 20;
+				i = fDisableMetro ? 19 : 20;
 				DrawText(hbufdc, szProgs[i], cchProgs[i], &rcPane[7], u);
-				i = dwDisableRibbon ? 21 : 22;
+				i = fDisableRibbon ? 21 : 22;
 				DrawText(hbufdc, szProgs[i], cchProgs[i], &rcPane[8], u);
-				i = dwUseSmallFont ? 23 : 24;
+				i = fUseSmallFont ? 23 : 24;
 				DrawText(hbufdc, szProgs[i], cchProgs[i], &rcPane[9], u);
+				i = fHideTrayShowDesktop ? 25 : 26;
+				DrawText(hbufdc, szProgs[i], cchProgs[i], &rcPane[10], u);
 				u |= DT_CENTER;
 				DrawText(hbufdc, szProgs[4], cchProgs[4], &rcPane[20], u);
 			}
 			else
 			{
-				cx = rcPane[7].bottom - rcPane[7].top;
-				cy = cx - rcPane[7].top - rcPane[7].top;
-				for(i=7; i<19; i++)
+				if (flList.bshow)
 				{
-					rcPane[23].top = rcPane[i].top + rcPane[7].top;
-					rcPane[23].bottom = rcPane[23].top + cy;
-					FillRect(hbufdc, &rcPane[23], (HBRUSH)(COLOR_3DDKSHADOW + 1));
+					x = -rcPane[23].left;
+					nLastItem = 0;
+					DrawFileList(&flList, &hbufdc, &x, TRUE);
+					for (i=nLastItem; i<12; i++)
+						FillRect(hbufdc, &rcPane[i+7], (HBRUSH)(COLOR_BTNSHADOW + 1));
 
-					rcPane[i].left += cx;
-					DrawText(hbufdc, szProgs[i], cchProgs[i], &rcPane[i], u);
-					rcPane[i].left -= cx;
+					if (nMouseMove && nLastItem > 12)
+					{
+						FillRect(hbufdc, &rcPane[21], (HBRUSH)(COLOR_ACTIVEBORDER + 1));
+						rc.left = rcPane[21].left;
+						rc.right = rcPane[21].right;
+						x = rcPane[7].bottom - rcPane[7].top;
+						y = rcPane[21].bottom - rcPane[21].top;
+						d = y * y;
+						d /= x;
+						rc.bottom = (LONG)(d / nLastItem);
+
+						rc.top = y - rc.bottom;
+						d = nLastItem - 12;
+						d = rc.top / d;
+						rc.top = (LONG)(nFirstItem * d);
+						rc.top += rcPane[7].top;
+						rc.bottom += rc.top;
+						FillRect(hbufdc, &rc, (HBRUSH)(COLOR_SCROLLBAR + 1));
+					}
+					u |= DT_CENTER;
+					DrawText(hbufdc, szProgs[6], cchProgs[6], &rcPane[20], u);
 				}
-				u |= DT_CENTER;
-				DrawText(hbufdc, szProgs[5], cchProgs[5], &rcPane[20], u);
+				else
+				{
+					for(i=7; i<19; i++)
+					{
+						rc.left = rcPane[i].left + rcPane[7].top;
+						rc.top = rcPane[i].top + rcPane[7].top;
+						rc.bottom = rcPane[i].bottom - rcPane[7].top;
+						rc.right = rc.bottom - rc.top;
+						rc.right += rc.left;
+						FillRect(hbufdc, &rc, (HBRUSH)(COLOR_3DDKSHADOW + 1));
 
-				x = (int)rcPane[7].left;
-				y = (int)rcPane[7].top;
-				cx = (int)rcPane[22].top;
-				cy = (int)rcPane[22].bottom;
-				DrawIconEx(hbufdc, x, y, hProgsIcon, cx, cy, 0, NULL, DI_NORMAL);
+						rc.left = rc.right + rcPane[7].top;
+						rc.right = rcPane[7].right - rcPane[7].top;
+						DrawText(hbufdc, szProgs[i], cchProgs[i], &rc, u);
+					}
+					u |= DT_CENTER;
+					DrawText(hbufdc, szProgs[5], cchProgs[5], &rcPane[20], u);
+
+					x = (int)rcPane[7].left;
+					y = (int)rcPane[7].top;
+					cx = (int)rcPane[22].top;
+					cy = (int)rcPane[22].bottom;
+					DrawIconEx(hbufdc, x, y, hProgsIcon, cx, cy, 0, NULL, DI_NORMAL);
+				}
 			}
 
 			EndBufferedPaint(hbufpt, TRUE);
@@ -332,6 +422,23 @@ void OnPanePaint()
 
 		EndPaint(hPaneWnd, &ps);
 	}
+}
+
+void OnPaneMouseWheel(WPARAM wParam)
+{
+	int n;
+
+	if (nTab != 4 || !flList.bshow || !nMouseMove)
+		return;
+
+	n = GET_WHEEL_DELTA_WPARAM(wParam) / WHEEL_DELTA;
+	nFirstItem -= n;
+	if (nFirstItem > nLastItem - 12)
+		nFirstItem = nLastItem - 12;
+	if (nFirstItem < 0)
+		nFirstItem = 0;
+
+	InvalidateRect(hPaneWnd, NULL, TRUE);
 }
 
 void OnPaneMouseMove(LPARAM lParam)
@@ -355,7 +462,9 @@ void OnPaneMouseMove(LPARAM lParam)
 	if (nTab == 6)
 		n = 10;
 	else if (nTab == 5)
-		n = 9;
+		n = 10;
+	else if (flList.bshow && nLastItem > 12)
+		n = 21;
 	else
 		n = 20;
 	for (i=n; i>2; i--)
@@ -380,7 +489,9 @@ void OnPaneLButtonDown(LPARAM lParam)
 	if (nTab == 6)
 		n = 10;
 	else if (nTab == 5)
-		n = 9;
+		n = 10;
+	else if (flList.bshow && nLastItem > 12)
+		n = 21;
 	else
 		n = 20;
 	for (i=n; i>2; i--)
@@ -405,7 +516,9 @@ void OnPaneLButtonUp(LPARAM lParam)
 	if (nTab == 6)
 		n = 10;
 	else if (nTab == 5)
-		n = 9;
+		n = 10;
+	else if (flList.bshow && nLastItem > 12)
+		n = 21;
 	else
 		n = 20;
 	for (i=n; i>2; i--)
@@ -420,13 +533,15 @@ void OnPaneLButtonUp(LPARAM lParam)
 
 void OpenExecute(BOOL fOpen, WPARAM wParam)
 {
-	WPARAM w;
 	INT n;
 	UINT u;
 	DWORD dw;
 	TCHAR *pszop;
 	TCHAR *pszfile;
 	TCHAR *pszparam;
+	TCHAR szdir[MAX_PATH];
+	DWORD nsize;
+	WPARAM w;
 	HANDLE h;
 	TOKEN_PRIVILEGES tp;
 	HWND hwnd;
@@ -437,6 +552,7 @@ void OpenExecute(BOOL fOpen, WPARAM wParam)
 	pszop = NULL;
 	pszfile = NULL;
 	pszparam = NULL;
+	szdir[0] = TEXT('\0');
 
 	w = wParam >= 'A' ? wParam : nLButtonDown;
 	if (nTab == 6)
@@ -492,6 +608,9 @@ void OpenExecute(BOOL fOpen, WPARAM wParam)
 		case 9:
 			dw = 9;
 			break;
+		case 10:
+			dw = 10;
+			break;
 		default:
 			break;
 		}
@@ -520,6 +639,8 @@ void OpenExecute(BOOL fOpen, WPARAM wParam)
 		case 9:
 			nLButtonDown = 9;
 			pszfile = TEXT("cmd.exe");
+			nsize = MAX_PATH * sizeof(TCHAR);
+			ExpandEnvironmentStrings(TEXT("%HOMEDRIVE%%HOMEPATH%"), szdir, nsize);
 			break;
 		case 'A':
 		case 10:
@@ -606,31 +727,38 @@ void OpenExecute(BOOL fOpen, WPARAM wParam)
 			ExitWindowsEx(u - 1, SHTDN_REASON_FLAG_PLANNED);
 	}
 	
-	if (dw == 9)
+	if (dw == 10)
 	{
-		dwUseSmallFont = !dwUseSmallFont;
+		fHideTrayShowDesktop = !fHideTrayShowDesktop;
+		InvalidateRect(hTrayShowDesktopWnd, NULL, TRUE);
+		RegSetKeyValue(HKEY_CURRENT_USER, szSetupKey, TEXT("HideTrayShowDesktop"),
+			REG_DWORD, &fHideTrayShowDesktop, sizeof(BOOL));
+	}
+	else if (dw == 9)
+	{
+		fUseSmallFont = !fUseSmallFont;
 		hwnd = hRebarWnd;
-		if (dwUseSmallFont && hSyslistWnd)
+		if (fUseSmallFont && hSyslistWnd)
 			hwnd = hSyslistWnd;
 		hFont = (HFONT)SendMessage(hwnd, WM_GETFONT, 0, 0);
 		RegSetKeyValue(HKEY_CURRENT_USER, szSetupKey, TEXT("UseSmallFont"),
-			REG_DWORD, &dwUseSmallFont, sizeof(DWORD));
+			REG_DWORD, &fUseSmallFont, sizeof(BOOL));
 	}
 	else if (dw == 8)
 	{
-		dwDisableRibbon = !dwDisableRibbon;
-		Hook((PBYTE)NewFunc, (PBYTE)LoadLibraryExW, byFunc, dwDisableRibbon);
+		fDisableRibbon = !fDisableRibbon;
+		HookApi((PBYTE)NewFunc, (PBYTE)LoadLibraryExW, byFunc, fDisableRibbon);
 		RegSetKeyValue(HKEY_CURRENT_USER, szSetupKey, TEXT("DisableRibbon"),
-			REG_DWORD, &dwDisableRibbon, sizeof(DWORD));
+			REG_DWORD, &fDisableRibbon, sizeof(BOOL));
 	}
 	else if (dw == 7)
 	{
-		dwDisableMetro = !dwDisableMetro;
-		if (dwDisableMetro)
+		fDisableMetro = !fDisableMetro;
+		if (fDisableMetro)
 		{
 			pszop = TEXT("\\");
-			dw = lstrlen(pszop) * sizeof(TCHAR);
-			RegSetKeyValue(HKEY_CURRENT_USER, szImsspKey, NULL, REG_SZ, pszop, dw);
+			nsize = lstrlen(pszop) * sizeof(TCHAR);
+			RegSetKeyValue(HKEY_CURRENT_USER, szImsspKey, NULL, REG_SZ, pszop, nsize);
 		}
 		else
 		{
@@ -640,8 +768,34 @@ void OpenExecute(BOOL fOpen, WPARAM wParam)
 		}
 	}
 
-	if (pszfile)
-		ShellExecute(NULL, pszop, pszfile, pszparam, NULL, SW_SHOW);
+	if (nTab == 4)
+	{
+		if (nLButtonDown == 20)
+			flList.bshow = !flList.bshow;
+
+		if (flList.bshow)
+		{
+			GetFileList(&flList);
+			if (nLButtonDown > 6 && nLButtonDown < 19)
+			{
+				n = 0;
+				nLastItem = 0;
+				nLButtonDown -= 7;
+				DrawFileList(&flList, NULL, &n, FALSE);
+				if (nFirstItem > nLastItem - 12)
+					nFirstItem = nLastItem - 12;
+				if (nFirstItem < 0)
+					nFirstItem = 0;
+			}
+		}
+		else
+		{
+			nFirstItem = 0;
+			FreeFileList(&flList);
+			if (pszfile)
+				ShellExecute(NULL, pszop, pszfile, pszparam, szdir, SW_SHOW);
+		}
+	}
 
 	nLButtonDown = 0;
 	InvalidateRect(hPaneWnd, NULL, TRUE);
@@ -657,14 +811,14 @@ HMODULE WINAPI NewFunc(LPCWSTR lpLibFileName, HANDLE hFile, DWORD dwFlags)
 	if (!lstrcmpiW(lpLibFileName, L"UIRibbonRes.dll"))
 		return NULL;
 
-	Hook((PBYTE)NewFunc, (PBYTE)LoadLibraryExW, byFunc, 0);
+	HookApi((PBYTE)NewFunc, (PBYTE)LoadLibraryExW, byFunc, 0);
 	hmod = LoadLibraryExW(lpLibFileName, hFile, dwFlags);
-	Hook((PBYTE)NewFunc, (PBYTE)LoadLibraryExW, byFunc, 1);
+	HookApi((PBYTE)NewFunc, (PBYTE)LoadLibraryExW, byFunc, 1);
 
 	return hmod;
 }
 
-void Hook(PBYTE pbyNewFunc, PBYTE pbyOldFunc, PBYTE pbyFunc, DWORD dwHook)
+void HookApi(PBYTE pbyNewFunc, PBYTE pbyOldFunc, PBYTE pbyFunc, DWORD dwHook)
 {
 	DWORD dw;
 
@@ -681,4 +835,270 @@ void Hook(PBYTE pbyNewFunc, PBYTE pbyOldFunc, PBYTE pbyFunc, DWORD dwHook)
 	VirtualProtect(pbyOldFunc, 5, PAGE_EXECUTE_READWRITE, &dw);
 	memcpy(pbyOldFunc, dwHook ? &pbyFunc[5] : &pbyFunc[0], 5);
 	VirtualProtect(pbyOldFunc, 5, dw, &dw);
+}
+
+//
+// FileList
+//
+HRESULT GetFileList(FILELIST *pfl)
+{
+	HRESULT hr;
+	IImageList *pimgl;
+	IShellItem *psi;
+	IShellItem *psisub;
+	IEnumShellItems *pesi;
+	SHFILEINFO sfi;
+	SFGAOF sfg;
+	TCHAR *psz;
+	int i, m, n, t, cmp;
+
+	if (!pfl)
+		return E_FAIL;
+	if (pfl->pfl)
+		return S_OK;
+
+	pimgl = NULL;
+	psi = NULL;
+	psisub = NULL;
+	pesi = NULL;
+	psz = pfl->pszpath1;
+
+	t = 100;
+	pfl->pfl = (FILELIST *)CoTaskMemAlloc(t * sizeof(FILELIST));
+	if (!pfl->pfl)
+		return E_OUTOFMEMORY;
+	ZeroMemory(pfl->pfl, t * sizeof(FILELIST));
+	t--;
+
+	hr = SHGetImageList(SHIL_LARGE, IID_PPV_ARGS(&pimgl));//SHIL_EXTRALARGE
+	if (FAILED(hr))
+		goto end;
+start:
+	hr = SHCreateItemFromParsingName(psz, NULL, IID_PPV_ARGS(&psi));
+	if (FAILED(hr))
+		goto end;
+
+	hr = psi->BindToHandler(NULL, BHID_EnumItems, IID_PPV_ARGS(&pesi));
+	if (FAILED(hr))
+		goto end;
+
+	while (pesi->Next(1, &psisub, NULL) == S_OK)
+	{
+		if (pfl->nfldr + pfl->nfile >= t)
+			break;
+		hr = psisub->GetAttributes(SFGAO_FOLDER | SFGAO_HIDDEN, &sfg);
+		if (FAILED(hr))
+			break;
+		if (sfg & SFGAO_HIDDEN)
+		{
+			psisub->Release();
+			psisub = NULL;
+			continue;
+		}
+		hr = psisub->GetDisplayName(SIGDN_NORMALDISPLAY, &pfl->pfl[t].pszdisp);
+		if (FAILED(hr))
+			break;
+		hr = psisub->GetDisplayName(SIGDN_FILESYSPATH, &pfl->pfl[t].pszpath1);
+		if (FAILED(hr))
+			break;
+		if (!SHGetFileInfo(pfl->pfl[t].pszpath1, 0, &sfi, sizeof(SHFILEINFO),
+			SHGFI_SYSICONINDEX))
+			break;
+		hr = pimgl->GetIcon(sfi.iIcon, ILD_NORMAL, &pfl->pfl[t].hicon);
+		if (FAILED(hr))
+			break;
+
+		n = pfl->nfldr;
+		m = pfl->nfldr + pfl->nfile;
+		if (sfg & SFGAO_FOLDER)
+		{
+			pfl->pfl[t].bfldr = TRUE;
+			memcpy(&pfl->pfl[m], &pfl->pfl[n], sizeof(FILELIST));
+			memcpy(&pfl->pfl[n], &pfl->pfl[t], sizeof(FILELIST));
+			for (i=0; i<n; i++)
+			{
+				cmp = lstrcmp(pfl->pfl[n].pszdisp, pfl->pfl[i].pszdisp);
+				if (cmp < 0)
+				{
+					memcpy(&pfl->pfl[t], &pfl->pfl[i], sizeof(FILELIST));
+					memcpy(&pfl->pfl[i], &pfl->pfl[n], sizeof(FILELIST));
+					memcpy(&pfl->pfl[n], &pfl->pfl[t], sizeof(FILELIST));
+				}
+				else if (cmp == 0)
+				{
+					DestroyIcon(pfl->pfl[n].hicon);
+					CoTaskMemFree(pfl->pfl[n].pszdisp);
+					pfl->pfl[i].pszpath2 = pfl->pfl[n].pszpath1;
+					memcpy(&pfl->pfl[n], &pfl->pfl[m], sizeof(FILELIST));
+					m = pfl->nfldr;
+					pfl->nfldr--;
+					break;
+				}
+			}
+			pfl->nfldr++;
+			n = pfl->nfldr;
+		}
+		else
+		{
+			pfl->pfl[t].bfldr = FALSE;
+			memcpy(&pfl->pfl[m], &pfl->pfl[t], sizeof(FILELIST));
+			pfl->nfile++;
+		}
+
+		for (i=n; i<m; i++)
+		{
+			cmp = lstrcmp(pfl->pfl[m].pszdisp, pfl->pfl[i].pszdisp);
+			if (cmp < 0)
+			{
+				memcpy(&pfl->pfl[t], &pfl->pfl[i], sizeof(FILELIST));
+				memcpy(&pfl->pfl[i], &pfl->pfl[m], sizeof(FILELIST));
+				memcpy(&pfl->pfl[m], &pfl->pfl[t], sizeof(FILELIST));
+			}
+		}
+
+		ZeroMemory(&pfl->pfl[t], sizeof(FILELIST));
+		psisub->Release();
+		psisub = NULL;
+	}
+
+end:
+	if (pfl->pfl[t].hicon)
+	{
+		DestroyIcon(pfl->pfl[t].hicon);
+		pfl->pfl[t].hicon = NULL;
+	}
+	if (pfl->pfl[t].pszdisp)
+	{
+		CoTaskMemFree(pfl->pfl[t].pszdisp);
+		pfl->pfl[t].pszdisp = NULL;
+	}
+	if (pfl->pfl[t].pszpath1)
+	{
+		CoTaskMemFree(pfl->pfl[t].pszpath1);
+		pfl->pfl[t].pszpath1 = NULL;
+	}
+	if (psisub)
+	{
+		psisub->Release();
+		psisub = NULL;
+	}
+	if (pesi)
+	{
+		pesi->Release();
+		pesi = NULL;
+	}
+	if (psi)
+	{
+		psi->Release();
+		psi = NULL;
+	}
+	if (psz == pfl->pszpath1 && lstrlen(psz))
+	{
+		psz = pfl->pszpath2;
+		if (lstrlen(psz))
+			goto start;
+	}
+	if (pimgl)
+	{
+		pimgl->Release();
+		pimgl = NULL;
+	}
+
+	return hr;
+}
+
+void DrawFileList(FILELIST *pfl, HDC *phdc, INT *px, BOOL fdraw)
+{
+	RECT rc;
+	int i, x, y, cx, cy, n;
+
+	if (!pfl || !pfl->pfl)
+		return;
+
+	*px += rcPane[23].left;
+	for (i=0; i<pfl->nfldr+pfl->nfile; i++)
+	{
+		nLastItem++;
+		if (fdraw)
+		{
+			if (nLastItem > nFirstItem && nLastItem < nFirstItem + 13)
+			{
+				n = nLastItem - nFirstItem + 6;
+				rc.top = rcPane[n].top + rcPane[7].top;
+				rc.bottom = rcPane[n].bottom - rcPane[7].top;
+				rc.left = rcPane[n].left + rcPane[7].top + *px;
+				rc.right = rc.bottom - rc.top;
+				rc.right += rc.left;
+				FillRect(*phdc, &rc, (HBRUSH)(COLOR_3DDKSHADOW + 1));
+
+				x = (int)rc.left;
+				y = (int)rc.top;
+				cx = (int)(rc.right - rc.left);
+				cy = (int)(rc.bottom - rc.top);
+				DrawIconEx(*phdc, x, y, pfl->pfl[i].hicon, cx, cy, 0, NULL, DI_NORMAL);
+
+				rc.left = rc.right + rcPane[7].top;
+				rc.right = rcPane[7].right - rcPane[7].top;
+				n = lstrlen(pfl->pfl[i].pszdisp);
+				DrawText(*phdc, pfl->pfl[i].pszdisp, n, &rc, DT_SINGLELINE | DT_VCENTER);
+			}
+		}
+		else
+		{
+			if (nLastItem == nLButtonDown + nFirstItem + 1)
+			{
+				if (pfl->pfl[i].bfldr)
+				{
+					pfl->pfl[i].bshow = !pfl->pfl[i].bshow;
+					if (pfl->pfl[i].bshow)
+						GetFileList(&pfl->pfl[i]);
+					else
+						FreeFileList(&pfl->pfl[i]);
+				}
+				else
+					ShellExecute(NULL, NULL, pfl->pfl[i].pszpath1, NULL, NULL, SW_SHOW);
+			}
+		}
+
+		if (pfl->pfl[i].bshow)
+			DrawFileList(&pfl->pfl[i], phdc, px, fdraw);
+	}
+	*px -= rcPane[23].left;
+}
+
+void FreeFileList(FILELIST *pfl)
+{
+	int i;
+
+	if (!pfl || !pfl->pfl)
+		return;
+
+	for (i=0; i<pfl->nfldr+pfl->nfile; i++)
+	{
+		if (pfl->pfl[i].hicon)
+		{
+			DestroyIcon(pfl->pfl[i].hicon);
+			pfl->pfl[i].hicon = NULL;
+		}
+		if (pfl->pfl[i].pszdisp)
+		{
+			CoTaskMemFree(pfl->pfl[i].pszdisp);
+			pfl->pfl[i].pszdisp = NULL;
+		}
+		if (pfl->pfl[i].pszpath1)
+		{
+			CoTaskMemFree(pfl->pfl[i].pszpath1);
+			pfl->pfl[i].pszpath1 = NULL;
+		}
+		if (pfl->pfl[i].pszpath2)
+		{
+			CoTaskMemFree(pfl->pfl[i].pszpath2);
+			pfl->pfl[i].pszpath2 = NULL;
+		}
+		FreeFileList(&pfl->pfl[i]);
+	}
+	pfl->nfldr = 0;
+	pfl->nfile = 0;
+	CoTaskMemFree(pfl->pfl);
+	pfl->pfl = NULL;
 }
